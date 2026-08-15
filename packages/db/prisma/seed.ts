@@ -6,7 +6,7 @@
  *
  * Synthetic data only. No production mortgage or borrower data.
  */
-import { hash } from "bcryptjs";
+import bcrypt from "bcryptjs";
 import {
   PrismaClient,
   RoleName,
@@ -268,7 +268,7 @@ async function seedDemoOrganization(roles: Map<RoleName, string>) {
     });
   }
 
-  const devPasswordHash = await hash("DevPassword123!", 10);
+  const devPasswordHash = await bcrypt.hash("DevPassword123!", 10);
   const seedUsers: { email: string; name: string; role: RoleName; branchId?: string; teamId?: string }[] = [
     { email: "platform-admin@dev.mhg.internal", name: "Dev Platform Admin", role: "PLATFORM_ADMIN" },
     { email: "company-admin@dev.mhg.internal", name: "Dev Company Admin", role: "COMPANY_ADMIN" },

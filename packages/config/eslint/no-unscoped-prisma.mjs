@@ -10,10 +10,19 @@
  * RLS session variable before any query runs.
  */
 
-/** Files allowed to import the raw prisma client directly. */
+/**
+ * Files allowed to import the raw prisma client directly.
+ *
+ * packages/auth is a deliberate exception: the Auth.js Prisma adapter and
+ * the login/session lookups it depends on (User/Account/Session) operate on
+ * global identity tables that are intentionally NOT organization-scoped —
+ * a user must be looked up by email before any org context exists. See
+ * docs/architecture/database-schema.md ("not RLS-protected" tables).
+ */
 const ALLOWED_PATTERNS = [
   /packages\/db\//,
   /packages\/core\/src\/scope\.ts$/,
+  /packages\/auth\/src\//,
   /\.test\.ts$/,
   /\.spec\.ts$/,
   /seed\.ts$/,
