@@ -1,0 +1,8 @@
+@import "tailwindcss";
+@import "@mhg/config/tailwind-theme.css";
+
+body {
+  background-color: var(--color-surface);
+  color: var(--color-surface-foreground);
+  font-family: var(--font-sans);
+}
