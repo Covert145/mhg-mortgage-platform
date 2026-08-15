@@ -18,5 +18,7 @@ export type { AssignOrgMembershipInput, OrgMembershipDto } from "./services/memb
 export { createContact, createPublicLead, getContact, createContactInput } from "./services/contact";
 export type { CreateContactInput } from "./services/contact";
 
+export { getCallerRole } from "./services/role";
+
 export { toContactDto } from "./dto/contact";
 export type { ContactInternalDto, ContactExternalDto, ContactRecord } from "./dto/contact";
