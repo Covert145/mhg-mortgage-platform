@@ -25,6 +25,7 @@ export const baseConfig = [
       "**/.turbo/**",
       "**/prisma/generated/**",
       "**/storybook-static/**",
+      "**/next-env.d.ts",
     ],
   },
 ];
