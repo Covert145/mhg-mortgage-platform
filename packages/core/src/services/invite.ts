@@ -92,6 +92,16 @@ export async function acceptInvite(input: AcceptInviteInput): Promise<AcceptInvi
       throw new Error("Invite is invalid, expired, or already used");
     }
 
+    // The rest of this transaction runs unscoped (withPlatformScope — no
+    // session/org context exists yet for a brand-new registrant), which is
+    // fine for the identity-layer tables (User, OrgMembership, Invite — see
+    // the invite_token_lookup and org_membership_identity_lookup migration
+    // notes) but audit_logs *is* RLS-protected. Now that the invite has
+    // told us which organization this is, set that context explicitly so
+    // the audit log write below passes RLS instead of being silently
+    // rejected.
+    await tx.$executeRaw`SELECT set_config('app.current_org_id', ${invite.organizationId}, true)`;
+
     const hashedPassword = await hashPassword(data.password);
 
     const user = await tx.user.upsert({

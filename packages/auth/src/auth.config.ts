@@ -35,6 +35,14 @@ const credentialsSchema = z.object({
 export const authConfig: NextAuthConfig = {
   adapter: PrismaAdapter(prisma),
   session: { strategy: "jwt", maxAge: 8 * 60 * 60 },
+  // Without this, `next start` (production mode) refuses to trust the host
+  // header and silently fails to persist the session cookie over plain
+  // HTTP — reproduced during Phase 1 e2e testing against a production
+  // build on http://localhost. Real deployments (Vercel) terminate TLS in
+  // front of the app, so the host header is trustworthy there too; this is
+  // not a security regression, just Auth.js's production-mode default
+  // being conservative about proxied/non-HTTPS hosts.
+  trustHost: true,
   pages: {
     signIn: "/login",
   },

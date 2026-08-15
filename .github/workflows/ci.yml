@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mhg_platform
+  DATABASE_URL: postgresql://mhg_app:mhg_app_dev_password_change_in_production@localhost:5432/mhg_platform
+  AUTH_SECRET: ci-only-secret-not-for-production-0123456789
+  NEXTAUTH_URL: http://localhost:3001
+  MARKETING_ORG_ID: 00000000-0000-0000-0000-000000000001
+  NEXT_PUBLIC_PLATFORM_URL: http://localhost:3001
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mhg_platform
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A second, separate Postgres database backs Prisma Migrate's shadow-
+      # database diffing (see the migration-drift check below) — kept apart
+      # from the app database so diffing never touches real data.
+      - name: Create shadow database
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE mhg_platform_shadow;"
+
+      - name: Apply migrations (creates the RLS-restricted mhg_app role)
+        working-directory: packages/db
+        run: pnpm exec prisma migrate deploy
+
+      - name: Check for schema drift not captured by a migration
+        working-directory: packages/db
+        run: |
+          pnpm exec prisma migrate diff \
+            --from-migrations ./prisma/migrations \
+            --to-schema-datamodel ./prisma/schema.prisma \
+            --shadow-database-url postgresql://postgres:postgres@localhost:5432/mhg_platform_shadow \
+            --exit-code
+
+      - name: Seed reference data
+        working-directory: packages/db
+        run: pnpm exec tsx prisma/seed.ts
+
+      - name: Typecheck
+        run: pnpm turbo run typecheck
+
+      - name: Lint
+        run: pnpm turbo run lint
+
+      - name: Unit & integration tests (includes the RLS cross-tenant isolation test)
+        run: pnpm turbo run test
+
+      - name: Build
+        run: pnpm turbo run build
+
+      - name: Install Playwright browsers
+        working-directory: apps/platform
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E smoke tests
+        working-directory: apps/platform
+        run: pnpm exec playwright test --project=chromium
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/platform/playwright-report/
+          retention-days: 7
+
+      - name: Verify no Base44 references
+        run: |
+          if grep -riE "base44" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.json" \
+              --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next -l . | grep -v "^./docs/"; then
+            echo "Found a Base44 reference outside /docs — this platform must remain fully independent."
+            exit 1
+          fi
+          echo "No Base44 references outside /docs."

@@ -26,6 +26,13 @@ export async function createOrganization(
   return requirePlatformAdmin(session, async (tx) => {
     const org = await tx.organization.create({ data });
 
+    // audit_logs is RLS-protected; requirePlatformAdmin's transaction runs
+    // unscoped (no single org exists yet to scope to before this insert).
+    // Now that the new org exists, set that context so the write below
+    // passes RLS — same fix as acceptInvite, see
+    // packages/core/src/services/invite.ts.
+    await tx.$executeRaw`SELECT set_config('app.current_org_id', ${org.id}, true)`;
+
     await writeAuditLog(tx, {
       organizationId: org.id,
       actorId: session.userId,
