@@ -18,7 +18,7 @@ test.describe("Role-based routing", () => {
     await page.getByLabel("Password").fill(DEV_PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/crm");
-    await expect(page.locator("header").getByText("LOAN_OFFICER")).toBeVisible();
+    await expect(page.locator("header").getByText("Loan Officer")).toBeVisible();
   });
 
   test("a loan officer is redirected away from /admin via direct URL navigation", async ({ page }) => {
@@ -39,7 +39,7 @@ test.describe("Role-based routing", () => {
     await page.getByLabel("Password").fill(DEV_PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL("**/admin");
-    await expect(page.locator("header").getByText("PLATFORM_ADMIN")).toBeVisible();
+    await expect(page.locator("header").getByText("Platform Admin")).toBeVisible();
   });
 
   test("borrower logs in and lands on /portal, and cannot reach /crm", async ({ page }) => {
@@ -86,7 +86,7 @@ test.describe("Invite-only registration", () => {
     await page.getByRole("button", { name: "Create account" }).click();
 
     await page.waitForURL("**/crm");
-    await expect(page.locator("header").getByText("LOAN_OFFICER")).toBeVisible();
+    await expect(page.locator("header").getByText("Loan Officer")).toBeVisible();
 
     // Cleanup so repeated runs stay idempotent.
     await prisma.orgMembership.deleteMany({ where: { user: { email } } });
