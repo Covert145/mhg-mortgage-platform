@@ -18,6 +18,15 @@ importers:
         specifier: ^5.7.3
         version: 5.9.3
 
+  packages/ai:
+    devDependencies:
+      '@mhg/config':
+        specifier: workspace:*
+        version: link:../config
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
   packages/auth:
     dependencies:
       '@auth/prisma-adapter':
@@ -57,6 +66,18 @@ importers:
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
+
+  packages/comms:
+    devDependencies:
+      '@mhg/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
 
   packages/config:
     dependencies:
@@ -120,6 +141,24 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.23.12
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
+  packages/property-intel:
+    devDependencies:
+      '@mhg/config':
+        specifier: workspace:*
+        version: link:../config
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
+  packages/rates:
+    devDependencies:
+      '@mhg/config':
+        specifier: workspace:*
+        version: link:../config
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
