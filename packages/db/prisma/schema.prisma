@@ -1,0 +1,1613 @@
+// Mobile Home Guy Mortgage Platform — Phase 1 database schema.
+// See /docs/architecture/database-schema.md for the design rationale.
+// Every organization-owned model carries a non-nullable organizationId,
+// enforced additionally by PostgreSQL Row-Level Security policies added in
+// migrations/0002_row_level_security/migration.sql — see
+// /docs/architecture/security-architecture.md #3.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy: Organization -> Branch -> Team -> User
+// ---------------------------------------------------------------------------
+
+enum OrgStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model Organization {
+  id        String       @id @default(uuid())
+  name      String
+  nmlsId    String?
+  status    OrgStatus    @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  branches             Branch[]
+  memberships          OrgMembership[]
+  contacts             Contact[]
+  partners             Partner[]
+  partnerCompanies     PartnerCompany[]
+  pipelines            Pipeline[]
+  loanFiles            LoanFile[]
+  opportunities        Opportunity[]
+  tasks                Task[]
+  activities           Activity[]
+  communications       Communication[]
+  campaigns            Campaign[]
+  documents             Document[]
+  documentTypes        DocumentType[]
+  auditLogs            AuditLog[]
+  aiConversations      AiConversation[]
+
+  @@map("organizations")
+}
+
+model Branch {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  state          String?
+  zip            String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  teams        Team[]
+  memberships  OrgMembership[]
+
+  @@index([organizationId])
+  @@map("branches")
+}
+
+model Team {
+  id        String   @id @default(uuid())
+  branchId  String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branch      Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  memberships OrgMembership[]
+
+  @@index([branchId])
+  @@map("teams")
+}
+
+// NextAuth.js (Auth.js v5) Prisma adapter tables. User carries platform-specific
+// fields alongside the fields the adapter expects (id, email, name, image,
+// emailVerified).
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?
+  hashedPassword String?
+  nmlsId        String?
+  mfaSecret     String?
+  mfaEnabled    Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  memberships  OrgMembership[]
+
+  ownedContacts       Contact[]       @relation("ContactOwner")
+  ownedOpportunities  Opportunity[]   @relation("OpportunityOwner")
+  assignedTasks       Task[]          @relation("TaskAssignee")
+  loanFilesAsLO       LoanFile[]      @relation("LoanFileLoanOfficer")
+  loanFilesAsProcessor LoanFile[]     @relation("LoanFileProcessor")
+  activities          Activity[]      @relation("ActivityActor")
+  auditLogs           AuditLog[]      @relation("AuditActor")
+  sentCommunications  Communication[] @relation("CommunicationSender")
+  uploadedDocuments   Document[]      @relation("DocumentUploader")
+  documentAudits      DocumentAudit[] @relation("DocumentAuditActor")
+  approvedCampaigns   Campaign[]      @relation("CampaignApprover")
+  createdCampaigns    Campaign[]      @relation("CampaignCreator")
+  invitesSent         Invite[]        @relation("InviteSentBy")
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id                 String   @id @default(uuid())
+  sessionToken       String   @unique
+  userId             String
+  activeOrganizationId String?
+  expires            DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// Invite-only registration (docs/architecture/security-architecture.md #1)
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model Invite {
+  id             String       @id @default(uuid())
+  organizationId String
+  branchId       String?
+  teamId         String?
+  email          String
+  roleId         String
+  token          String       @unique
+  status         InviteStatus @default(PENDING)
+  sentByUserId   String
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime     @default(now())
+
+  sentBy User @relation("InviteSentBy", fields: [sentByUserId], references: [id])
+  role   Role @relation(fields: [roleId], references: [id])
+
+  @@index([organizationId])
+  @@map("invites")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC
+// ---------------------------------------------------------------------------
+
+enum RoleName {
+  PLATFORM_ADMIN
+  COMPANY_ADMIN
+  MANAGER
+  LOAN_OFFICER
+  PROCESSOR
+  BORROWER
+  REALTOR_PARTNER
+}
+
+model Role {
+  id   String   @id @default(uuid())
+  name RoleName @unique
+
+  memberships     OrgMembership[]
+  permissions     RolePermission[]
+  invites         Invite[]
+
+  @@map("roles")
+}
+
+enum PermissionAction {
+  VIEW
+  CREATE
+  EDIT
+  DELETE
+  MANAGE
+}
+
+model Permission {
+  id       String            @id @default(uuid())
+  resource String
+  action   PermissionAction
+
+  roles RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// Central RBAC join: a user's role is scoped per-organization (and optionally
+// per branch/team), supporting one person (e.g. a realtor) belonging to
+// multiple organizations. See docs/architecture/security-architecture.md #2.
+model OrgMembership {
+  id             String   @id @default(uuid())
+  userId         String
+  organizationId String
+  branchId       String?
+  teamId         String?
+  roleId         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch?      @relation(fields: [branchId], references: [id])
+  team         Team?        @relation(fields: [teamId], references: [id])
+  role         Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("org_memberships")
+}
+
+// ---------------------------------------------------------------------------
+// CRM core
+// ---------------------------------------------------------------------------
+
+enum ContactType {
+  LEAD
+  BORROWER
+  PAST_CLIENT
+  REALTOR
+  OTHER
+}
+
+model Contact {
+  id             String      @id @default(uuid())
+  organizationId String
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  contactType    ContactType @default(LEAD)
+  leadSource     String?
+  leadScore      Int?
+  ownerId        String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization  Organization                  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner         User?                         @relation("ContactOwner", fields: [ownerId], references: [id])
+  preference    ContactCommunicationPreference?
+  applicants    Applicant[]
+  loanFiles     LoanFile[]
+  opportunities Opportunity[]
+  partners      Partner[]
+  communications Communication[]
+  documents     Document[]
+  aiConversations AiConversation[]
+
+  @@index([organizationId])
+  @@index([organizationId, email])
+  @@index([organizationId, phone])
+  @@map("contacts")
+}
+
+enum PreferredChannel {
+  SMS
+  EMAIL
+  PHONE
+}
+
+model ContactCommunicationPreference {
+  id               String            @id @default(uuid())
+  contactId        String            @unique
+  smsOptIn         Boolean           @default(false)
+  emailOptIn       Boolean           @default(false)
+  doNotCall        Boolean           @default(false)
+  preferredChannel PreferredChannel?
+  optInTimestamp   DateTime?
+  optInSource      String?
+  optOutTimestamp  DateTime?
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@map("contact_communication_preferences")
+}
+
+enum PartnerType {
+  REALTOR
+  PARK_MANAGER
+  DEALER
+  OTHER
+}
+
+enum PartnerCompanyType {
+  REALTY_BROKERAGE
+  MH_DEALER
+  PARK_MANAGEMENT
+  OTHER
+}
+
+model PartnerCompany {
+  id             String             @id @default(uuid())
+  organizationId String
+  name           String
+  companyType    PartnerCompanyType
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  partners     Partner[]
+
+  @@index([organizationId])
+  @@map("partner_companies")
+}
+
+model Partner {
+  id               String       @id @default(uuid())
+  organizationId   String
+  contactId        String
+  partnerType      PartnerType
+  partnerCompanyId String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact        Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  partnerCompany PartnerCompany? @relation(fields: [partnerCompanyId], references: [id])
+  loanFiles      LoanFile[]
+
+  @@index([organizationId])
+  @@map("partners")
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline (docs/architecture/database-schema.md #3)
+// ---------------------------------------------------------------------------
+
+model Pipeline {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  isDefault      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stages       PipelineStage[]
+  loanFiles    LoanFile[]
+
+  @@index([organizationId])
+  @@map("pipelines")
+}
+
+enum PipelineStageCategory {
+  ACTIVE
+  CLOSED_WON
+  CLOSED_LOST
+  NURTURE
+}
+
+model PipelineStage {
+  id              String                 @id @default(uuid())
+  pipelineId      String
+  name            String
+  sortOrder       Int
+  stageCategory   PipelineStageCategory
+  isSystemDefault Boolean                @default(false)
+
+  pipeline        Pipeline          @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  loanFiles       LoanFile[]
+  stageHistoryTo  StageHistory[]    @relation("StageHistoryTo")
+  stageHistoryFrom StageHistory[]   @relation("StageHistoryFrom")
+  automationRules StageAutomationRule[]
+
+  @@index([pipelineId])
+  @@map("pipeline_stages")
+}
+
+model StageAutomationRule {
+  id              String   @id @default(uuid())
+  organizationId  String
+  pipelineStageId String
+  triggerEvent    String
+  action          Json
+  isActive        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  pipelineStage PipelineStage @relation(fields: [pipelineStageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("stage_automation_rules")
+}
+
+enum StageActorType {
+  USER
+  AI_AGENT
+  SYSTEM
+}
+
+model StageHistory {
+  id              String         @id @default(uuid())
+  loanFileId      String
+  fromStageId     String?
+  toStageId       String
+  changedByType   StageActorType @default(USER)
+  changedByUserId String?
+  changedAt       DateTime       @default(now())
+
+  loanFile  LoanFile      @relation(fields: [loanFileId], references: [id], onDelete: Cascade)
+  fromStage PipelineStage? @relation("StageHistoryFrom", fields: [fromStageId], references: [id])
+  toStage   PipelineStage  @relation("StageHistoryTo", fields: [toStageId], references: [id])
+
+  @@index([loanFileId])
+  @@map("stage_history")
+}
+
+// ---------------------------------------------------------------------------
+// LoanFile aggregate + mobile-home / URLA-aligned model
+// (docs/architecture/database-schema.md #4, #5)
+// ---------------------------------------------------------------------------
+
+enum LoanFileStatus {
+  IN_PROGRESS
+  ACTIVE
+  CLOSED_WON
+  CLOSED_LOST
+  NURTURE
+}
+
+model LoanFile {
+  id                String         @id @default(uuid())
+  organizationId    String
+  contactId         String
+  subjectPropertyId String?        @unique
+  pipelineId        String
+  pipelineStageId   String
+  currentStageEnteredAt DateTime   @default(now())
+  loanOfficerId     String?
+  processorId       String?
+  partnerId         String?
+  status            LoanFileStatus @default(IN_PROGRESS)
+  acknowledgments   Json?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact         Contact         @relation(fields: [contactId], references: [id])
+  subjectProperty SubjectProperty? @relation(fields: [subjectPropertyId], references: [id])
+  pipeline        Pipeline        @relation(fields: [pipelineId], references: [id])
+  pipelineStage   PipelineStage   @relation(fields: [pipelineStageId], references: [id])
+  loanOfficer     User?           @relation("LoanFileLoanOfficer", fields: [loanOfficerId], references: [id])
+  processor       User?           @relation("LoanFileProcessor", fields: [processorId], references: [id])
+  partner         Partner?        @relation(fields: [partnerId], references: [id])
+
+  applicants        Applicant[]
+  loanTerms         LoanTerms?
+  conditions        Condition[]
+  documentRequests  DocumentRequest[]
+  documents         Document[]
+  tasks             Task[]
+  activities        Activity[]
+  communications    Communication[]
+  stageHistory      StageHistory[]
+  underwritingDecision UnderwritingDecision?
+  closingDetails    ClosingDetails?
+
+  @@index([organizationId])
+  @@index([organizationId, pipelineStageId])
+  @@map("loan_files")
+}
+
+enum PropertyType {
+  MOBILE_HOME_IN_PARK
+  MANUFACTURED_HOME_IN_PARK
+  MANUFACTURED_HOME_WITH_LAND
+  MOBILE_HOME_WITH_LAND
+  SFR
+  CONDO
+  TOWNHOUSE
+  OTHER
+}
+
+enum LandOwnership {
+  PARK_OWNED
+  BORROWER_OWNED
+  OTHER
+}
+
+enum OccupancyType {
+  PRIMARY
+  SECONDARY
+  INVESTMENT
+  BUY_FOR_SOMEONE
+}
+
+model SubjectProperty {
+  id             String        @id @default(uuid())
+  organizationId String
+  propertyType   PropertyType
+  addressLine1   String
+  addressLine2   String?
+  city           String
+  state          String
+  zip            String
+  county         String?
+  landOwnership  LandOwnership @default(OTHER)
+  occupancyType  OccupancyType
+  estimatedValue Int? // integer cents
+  purchasePrice  Int? // integer cents
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  manufacturedHomeDetail ManufacturedHomeDetail?
+  loanFile               LoanFile?
+
+  @@index([organizationId])
+  @@map("subject_properties")
+}
+
+enum SectionType {
+  SINGLEWIDE
+  DOUBLEWIDE
+  TRIPLEWIDE
+}
+
+model ManufacturedHomeDetail {
+  id                String       @id @default(uuid())
+  subjectPropertyId String       @unique
+  year              Int?
+  make              String?
+  model             String?
+  serialNumber      String?
+  vin               String?
+  sizeSqFt          Int?
+  widthFt           Int?
+  lengthFt          Int?
+  bedrooms          Int?
+  bathrooms          Decimal?    @db.Decimal(3, 1)
+  sectionCount      Int?
+  sectionType       SectionType?
+
+  subjectProperty SubjectProperty @relation(fields: [subjectPropertyId], references: [id], onDelete: Cascade)
+  hudLabels       HudLabel[]
+  parkDetail      ParkDetail?
+
+  @@map("manufactured_home_details")
+}
+
+model HudLabel {
+  id                       String @id @default(uuid())
+  manufacturedHomeDetailId String
+  labelNumber              String
+
+  manufacturedHomeDetail ManufacturedHomeDetail @relation(fields: [manufacturedHomeDetailId], references: [id], onDelete: Cascade)
+
+  @@index([manufacturedHomeDetailId])
+  @@map("hud_labels")
+}
+
+enum ParkApprovalStatus {
+  NOT_REQUESTED
+  REQUESTED
+  APPROVED
+  DENIED
+}
+
+model ParkDetail {
+  id                       String              @id @default(uuid())
+  manufacturedHomeDetailId String              @unique
+  parkName                 String
+  parkAddressLine1         String?
+  parkAddressLine2         String?
+  parkCity                 String?
+  parkState                String?
+  parkZip                  String?
+  parkManagerName          String?
+  parkManagerPhone         String?
+  parkManagerEmail         String?
+  lotNumber                String?
+  lotRentMonthly           Int? // integer cents
+  parkApprovalStatus       ParkApprovalStatus  @default(NOT_REQUESTED)
+  parkApprovalDate         DateTime?
+  parkRulesDocumentId      String?
+  parkContactNotes         String?
+
+  manufacturedHomeDetail ManufacturedHomeDetail @relation(fields: [manufacturedHomeDetailId], references: [id], onDelete: Cascade)
+
+  @@map("park_details")
+}
+
+enum LoanProductType {
+  CHATTEL
+  LAND_HOME
+  CONVENTIONAL
+  FHA
+  VA
+  USDA
+  OTHER
+}
+
+enum LoanPurpose {
+  PURCHASE
+  REFINANCE
+  OTHER
+}
+
+enum AmortizationType {
+  FIXED
+  ADJUSTABLE
+}
+
+model LoanTerms {
+  id                String            @id @default(uuid())
+  loanFileId        String            @unique
+  loanProductType   LoanProductType
+  loanPurpose       LoanPurpose
+  loanAmount        Int? // integer cents
+  amortizationType  AmortizationType?
+  loanTermMonths    Int?
+  interestRateBps   Int? // basis points; mock/estimate only, see packages/rates
+  qualifyingFrontDti Decimal?         @db.Decimal(5, 2)
+  qualifyingBackDti  Decimal?         @db.Decimal(5, 2)
+  mortgageType      String?
+  projectType       String?
+  titleType         String?
+  communityPropertyState Boolean      @default(false)
+
+  loanFile           LoanFile             @relation(fields: [loanFileId], references: [id], onDelete: Cascade)
+  otherNewMortgages  OtherNewMortgage[]
+
+  @@map("loan_terms")
+}
+
+model OtherNewMortgage {
+  id            String  @id @default(uuid())
+  loanTermsId   String
+  creditorName  String
+  lienType      String?
+  monthlyPayment Int?
+  amount        Int?
+
+  loanTerms LoanTerms @relation(fields: [loanTermsId], references: [id], onDelete: Cascade)
+
+  @@map("other_new_mortgages")
+}
+
+// ---------------------------------------------------------------------------
+// Applicants / URLA sections 1-2 (docs/architecture/database-schema.md #4)
+// ---------------------------------------------------------------------------
+
+enum ApplicantType {
+  BORROWER
+  CO_BORROWER
+}
+
+enum Citizenship {
+  US_CITIZEN
+  PERMANENT_RESIDENT_ALIEN
+  NON_PERMANENT_RESIDENT_ALIEN
+}
+
+enum MaritalStatus {
+  MARRIED
+  SEPARATED
+  UNMARRIED
+}
+
+model Applicant {
+  id              String         @id @default(uuid())
+  loanFileId      String
+  contactId       String?
+  applicantType   ApplicantType
+  legalFirstName  String
+  middleName      String?
+  lastName        String
+  suffix          String?
+  ssnEncrypted    String?
+  dob             DateTime?
+  citizenship     Citizenship?
+  maritalStatus   MaritalStatus?
+  phone           String?
+  email           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  loanFile   LoanFile @relation(fields: [loanFileId], references: [id], onDelete: Cascade)
+  contact    Contact? @relation(fields: [contactId], references: [id])
+
+  dependents        Dependent[]
+  residenceHistory  ResidenceHistory[]
+  employment        Employment[]
+  otherIncome       OtherIncome[]
+  assets            Asset[]
+  liabilities       Liability[]
+  realEstateOwned   RealEstateOwned[]
+  declarations      Declaration[]
+  militaryService   MilitaryService?
+  demographicInfo   DemographicInfo?
+
+  @@index([loanFileId])
+  @@map("applicants")
+}
+
+model Dependent {
+  id             String  @id @default(uuid())
+  applicantId    String
+  ageAtApplication Int
+  relationship   String?
+
+  applicant Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  @@index([applicantId])
+  @@map("dependents")
+}
+
+enum ResidencyBasis {
+  OWN
+  RENT
+  LIVING_RENT_FREE
+}
+
+model ResidenceHistory {
+  id             String         @id @default(uuid())
+  applicantId    String
+  addressLine1   String
+  addressLine2   String?
+  city           String
+  state          String
+  zip            String
+  residencyBasis ResidencyBasis
+  durationMonths Int
+  isCurrent      Boolean        @default(false)
+
+  applicant Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  @@index([applicantId])
+  @@map("residence_history")
+}
+
+model Employment {
+  id              String    @id @default(uuid())
+  applicantId     String
+  employerName    String
+  addressLine1    String?
+  city            String?
+  state           String?
+  zip             String?
+  position        String?
+  startDate       DateTime?
+  endDate         DateTime?
+  isCurrent       Boolean   @default(true)
+  isSelfEmployed  Boolean   @default(false)
+  ownershipPercent Decimal? @db.Decimal(5, 2)
+  monthlyIncome   Int? // integer cents
+
+  applicant           Applicant            @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  selfEmploymentDetail SelfEmploymentDetail?
+
+  @@index([applicantId])
+  @@map("employment")
+}
+
+enum BusinessStructure {
+  SOLE_PROP
+  PARTNERSHIP
+  S_CORP
+  C_CORP
+  LLC
+}
+
+model SelfEmploymentDetail {
+  id                  String            @id @default(uuid())
+  employmentId        String            @unique
+  businessName        String
+  businessStructure   BusinessStructure
+  monthlyIncomeOrLoss Int? // integer cents
+  isLoss              Boolean           @default(false)
+
+  employment Employment @relation(fields: [employmentId], references: [id], onDelete: Cascade)
+
+  @@map("self_employment_details")
+}
+
+enum OtherIncomeType {
+  ALIMONY
+  CHILD_SUPPORT
+  SOCIAL_SECURITY
+  RETIREMENT
+  DISABILITY
+  OTHER
+}
+
+model OtherIncome {
+  id            String          @id @default(uuid())
+  applicantId   String
+  incomeType    OtherIncomeType
+  monthlyAmount Int // integer cents
+
+  applicant Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  @@index([applicantId])
+  @@map("other_income")
+}
+
+enum AssetType {
+  CHECKING
+  SAVINGS
+  RETIREMENT
+  STOCKS
+  GIFT
+  OTHER
+}
+
+model Asset {
+  id                   String    @id @default(uuid())
+  applicantId          String
+  assetType            AssetType
+  institutionName      String?
+  accountNumberMasked  String?
+  cashOrMarketValue    Int // integer cents
+
+  applicant  Applicant   @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  giftDetail GiftDetail?
+
+  @@index([applicantId])
+  @@map("assets")
+}
+
+model GiftDetail {
+  id                String  @id @default(uuid())
+  assetId            String  @unique
+  donorName          String
+  donorRelationship  String
+  deposited          Boolean @default(false)
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@map("gift_details")
+}
+
+enum LiabilityType {
+  CREDIT_CARD
+  INSTALLMENT
+  STUDENT_LOAN
+  AUTO_LOAN
+  MORTGAGE
+  ALIMONY_CHILD_SUPPORT
+  OTHER
+}
+
+model Liability {
+  id                     String        @id @default(uuid())
+  applicantId            String
+  liabilityType          LiabilityType
+  creditorName           String
+  accountNumberMasked    String?
+  monthlyPayment         Int // integer cents
+  unpaidBalance          Int // integer cents
+  willBePaidOffAtClosing Boolean       @default(false)
+
+  applicant       Applicant         @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  realEstateOwned RealEstateOwned[]
+
+  @@index([applicantId])
+  @@map("liabilities")
+}
+
+enum ReoStatus {
+  SOLD
+  PENDING_SALE
+  RETAINED
+}
+
+model RealEstateOwned {
+  id                  String        @id @default(uuid())
+  applicantId         String
+  addressLine1        String
+  city                String
+  state               String
+  zip                 String
+  propertyType        PropertyType
+  status              ReoStatus
+  occupancyType       OccupancyType
+  marketValue         Int? // integer cents
+  mortgageBalance     Int? // integer cents
+  monthlyRentalIncome Int? // integer cents
+  monthlyExpense      Int? // integer cents
+  liabilityId         String?
+
+  applicant Applicant  @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  liability Liability? @relation(fields: [liabilityId], references: [id])
+
+  @@index([applicantId])
+  @@map("real_estate_owned")
+}
+
+model Declaration {
+  id            String  @id @default(uuid())
+  applicantId   String
+  questionCode  String // stable code (A-I) referencing seeded DeclarationQuestion
+  answer        Boolean
+  explanation   String?
+
+  applicant Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  @@index([applicantId])
+  @@map("declarations")
+}
+
+// Canonical, stable declaration question set (seed data) so codes stay
+// stable if UI copy changes — see docs/architecture/database-schema.md #4.
+model DeclarationQuestion {
+  code String @id
+  text String
+
+  @@map("declaration_questions")
+}
+
+enum MilitaryServiceType {
+  ACTIVE
+  RESERVE_NATIONAL_GUARD
+  VETERAN
+  SURVIVING_SPOUSE
+  NONE
+}
+
+model MilitaryService {
+  id                     String              @id @default(uuid())
+  applicantId            String              @unique
+  served                 Boolean             @default(false)
+  branch                 String?
+  serviceType            MilitaryServiceType @default(NONE)
+  expectedCompletionDate DateTime?
+
+  applicant Applicant @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  @@map("military_service")
+}
+
+enum CollectionMethod {
+  FACE_TO_FACE
+  TELEPHONE
+  MAIL
+  EMAIL_INTERNET
+}
+
+enum Sex {
+  MALE
+  FEMALE
+  NOT_PROVIDED
+}
+
+// Highest compliance sensitivity in the model — HMDA/Reg B govern exact
+// values and multi-select semantics. Never required to proceed.
+model DemographicInfo {
+  id                 String            @id @default(uuid())
+  applicantId        String            @unique
+  sex                Sex               @default(NOT_PROVIDED)
+  collectionMethod   CollectionMethod?
+  applicantDidNotWish Boolean          @default(false)
+
+  applicant       Applicant                    @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  raceDetails      DemographicRaceDetail[]
+  ethnicityDetails DemographicEthnicityDetail[]
+
+  @@map("demographic_info")
+}
+
+model DemographicRaceDetail {
+  id                 String @id @default(uuid())
+  demographicInfoId  String
+  raceCode           String
+  subCategory        String?
+
+  demographicInfo DemographicInfo @relation(fields: [demographicInfoId], references: [id], onDelete: Cascade)
+
+  @@index([demographicInfoId])
+  @@map("demographic_race_details")
+}
+
+model DemographicEthnicityDetail {
+  id                 String @id @default(uuid())
+  demographicInfoId  String
+  ethnicityCode      String
+  subCategory        String?
+
+  demographicInfo DemographicInfo @relation(fields: [demographicInfoId], references: [id], onDelete: Cascade)
+
+  @@index([demographicInfoId])
+  @@map("demographic_ethnicity_details")
+}
+
+// ---------------------------------------------------------------------------
+// Processing / underwriting / closing
+// ---------------------------------------------------------------------------
+
+enum ConditionCategory {
+  INCOME
+  ASSET
+  PROPERTY
+  CREDIT
+  OTHER
+}
+
+enum ConditionStatus {
+  OPEN
+  SATISFIED
+  WAIVED
+}
+
+model Condition {
+  id                  String            @id @default(uuid())
+  loanFileId          String
+  category            ConditionCategory
+  description         String
+  status              ConditionStatus   @default(OPEN)
+  dueDate             DateTime?
+  satisfiedDocumentId String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  loanFile          LoanFile @relation(fields: [loanFileId], references: [id], onDelete: Cascade)
+  satisfiedDocument Document? @relation(fields: [satisfiedDocumentId], references: [id])
+
+  @@index([loanFileId])
+  @@map("conditions")
+}
+
+// Schema-only in Phase 1 — writable only by processor/underwriter/admin
+// roles, never by AI agents. See docs/architecture/ai-architecture.md #2.
+model UnderwritingDecision {
+  id            String   @id @default(uuid())
+  loanFileId    String   @unique
+  decision      String?
+  decidedByUserId String?
+  decidedAt     DateTime?
+  notes         String?
+
+  loanFile LoanFile @relation(fields: [loanFileId], references: [id], onDelete: Cascade)
+
+  @@map("underwriting_decisions")
+}
+
+model ClosingDetails {
+  id                       String    @id @default(uuid())
+  loanFileId               String    @unique
+  closingDate              DateTime?
+  fundingDate              DateTime?
+  titleCompany             String?
+  closingDisclosureSentDate DateTime?
+  docsOutDate              DateTime?
+  signingDate              DateTime?
+
+  loanFile LoanFile @relation(fields: [loanFileId], references: [id], onDelete: Cascade)
+
+  @@map("closing_details")
+}
+
+// ---------------------------------------------------------------------------
+// Documents (docs/architecture/database-schema.md #6, security-architecture.md #6)
+// ---------------------------------------------------------------------------
+
+enum DocumentCategory {
+  BORROWER
+  LOAN
+  UNDERWRITING
+  CLOSING
+  PARTNER
+}
+
+model DocumentType {
+  id                String           @id @default(uuid())
+  organizationId    String?
+  code              String
+  label             String
+  category          DocumentCategory
+  requiresVersioning Boolean         @default(false)
+
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  requests     DocumentRequest[]
+  documents    Document[]
+
+  @@unique([organizationId, code])
+  @@map("document_types")
+}
+
+enum DocumentRequestStatus {
+  REQUESTED
+  RECEIVED
+  REJECTED
+  WAIVED
+}
+
+model DocumentRequest {
+  id               String                 @id @default(uuid())
+  loanFileId       String
+  documentTypeId   String
+  requestedByUserId String
+  status           DocumentRequestStatus  @default(REQUESTED)
+  dueDate          DateTime?
+  satisfiesConditionId String?
+  createdAt        DateTime               @default(now())
+
+  loanFile     LoanFile     @relation(fields: [loanFileId], references: [id], onDelete: Cascade)
+  documentType DocumentType @relation(fields: [documentTypeId], references: [id])
+
+  @@index([loanFileId])
+  @@map("document_requests")
+}
+
+enum DocStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum VirusScanStatus {
+  PENDING
+  CLEAN
+  FLAGGED
+}
+
+model Document {
+  id                String          @id @default(uuid())
+  organizationId    String
+  loanFileId        String?
+  contactId         String?
+  documentTypeId    String
+  storageKey        String          @unique
+  originalFilename  String
+  mimeType          String
+  sizeBytes         Int
+  status            DocStatus       @default(PENDING_REVIEW)
+  virusScanStatus   VirusScanStatus @default(PENDING)
+  uploadedByUserId  String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  loanFile     LoanFile?     @relation(fields: [loanFileId], references: [id])
+  contact      Contact?      @relation(fields: [contactId], references: [id])
+  documentType DocumentType  @relation(fields: [documentTypeId], references: [id])
+  uploadedBy   User?         @relation("DocumentUploader", fields: [uploadedByUserId], references: [id])
+
+  versions    DocumentVersion[]
+  accessGrants DocumentAccess[]
+  audits      DocumentAudit[]
+  satisfiesConditions Condition[]
+
+  @@index([organizationId])
+  @@index([loanFileId])
+  @@map("documents")
+}
+
+model DocumentVersion {
+  id             String   @id @default(uuid())
+  documentId     String
+  versionNumber  Int
+  storageKey     String
+  uploadedAt     DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@map("document_versions")
+}
+
+model DocumentAccess {
+  id             String    @id @default(uuid())
+  documentId     String
+  grantedToUserId String
+  grantedByUserId String
+  grantedAt      DateTime  @default(now())
+  expiresAt      DateTime?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@map("document_access")
+}
+
+enum DocumentAuditAction {
+  VIEW
+  DOWNLOAD
+  UPLOAD
+  DELETE
+  STATUS_CHANGE
+}
+
+model DocumentAudit {
+  id         String               @id @default(uuid())
+  documentId String
+  actorId    String?
+  actorType  StageActorType       @default(USER)
+  action     DocumentAuditAction
+  timestamp  DateTime             @default(now())
+  ipAddress  String?
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  actor    User?    @relation("DocumentAuditActor", fields: [actorId], references: [id])
+
+  @@index([documentId])
+  @@map("document_audits")
+}
+
+// ---------------------------------------------------------------------------
+// Tasks / Activities / Opportunities
+// ---------------------------------------------------------------------------
+
+enum RelatedEntityType {
+  CONTACT
+  LOAN_FILE
+  OPPORTUNITY
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Task {
+  id             String            @id @default(uuid())
+  organizationId String
+  assigneeId     String?
+  relatedType    RelatedEntityType
+  relatedId      String
+  loanFileId     String?
+  title          String
+  dueDate        DateTime?
+  status         TaskStatus        @default(OPEN)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignee     User?        @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  loanFile     LoanFile?    @relation(fields: [loanFileId], references: [id])
+
+  @@index([organizationId])
+  @@index([organizationId, relatedType, relatedId])
+  @@map("tasks")
+}
+
+enum ActorType {
+  USER
+  AI_AGENT
+  SYSTEM
+}
+
+model Activity {
+  id             String            @id @default(uuid())
+  organizationId String
+  actorType      ActorType         @default(USER)
+  actorId        String?
+  relatedType    RelatedEntityType
+  relatedId      String
+  loanFileId     String?
+  activityType   String
+  payload        Json?
+  createdAt      DateTime          @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation("ActivityActor", fields: [actorId], references: [id])
+  loanFile     LoanFile?    @relation(fields: [loanFileId], references: [id])
+
+  @@index([organizationId])
+  @@index([organizationId, relatedType, relatedId])
+  @@map("activities")
+}
+
+enum OpportunityType {
+  PURCHASE
+  REFINANCE
+  CASH_OUT
+  HELOC
+  EQUITY
+  RATE_REDUCTION
+  ANNUAL_REVIEW
+}
+
+enum OpportunitySource {
+  WEBSITE
+  PROPERTY_INTEL
+  MANUAL
+  AI_DETECTED
+}
+
+enum OpportunityStatus {
+  OPEN
+  CONVERTED
+  DISMISSED
+}
+
+model Opportunity {
+  id             String            @id @default(uuid())
+  organizationId String
+  contactId      String
+  ownerId        String?
+  opportunityType OpportunityType
+  source         OpportunitySource
+  status         OpportunityStatus @default(OPEN)
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  owner        User?        @relation("OpportunityOwner", fields: [ownerId], references: [id])
+
+  @@index([organizationId])
+  @@map("opportunities")
+}
+
+// ---------------------------------------------------------------------------
+// Communications (schema only / unused in Phase 1 — see roadmap.md)
+// ---------------------------------------------------------------------------
+
+enum CommunicationChannel {
+  SMS
+  EMAIL
+  PHONE
+  VOICEMAIL
+  NOTE
+}
+
+enum CommunicationDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SenderType {
+  USER
+  AI_AGENT
+  SYSTEM
+}
+
+enum CommunicationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  RECEIVED
+}
+
+model Communication {
+  id                String                 @id @default(uuid())
+  organizationId    String
+  contactId         String
+  loanFileId        String?
+  channel           CommunicationChannel
+  direction         CommunicationDirection
+  senderType        SenderType             @default(USER)
+  senderId          String?
+  campaignId        String?
+  body              String?
+  status            CommunicationStatus    @default(QUEUED)
+  providerMessageId String?
+  createdAt         DateTime               @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  loanFile     LoanFile?    @relation(fields: [loanFileId], references: [id])
+  sender       User?        @relation("CommunicationSender", fields: [senderId], references: [id])
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id])
+
+  @@index([organizationId])
+  @@index([contactId])
+  @@map("communications")
+}
+
+// ---------------------------------------------------------------------------
+// Campaigns (schema only / unused in Phase 1)
+// ---------------------------------------------------------------------------
+
+enum CampaignStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum CampaignCreatedBy {
+  USER
+  AI_AGENT
+}
+
+model Campaign {
+  id               String            @id @default(uuid())
+  organizationId   String
+  name             String
+  status           CampaignStatus    @default(DRAFT)
+  createdBy        CampaignCreatedBy @default(USER)
+  createdByUserId  String?
+  approvedByUserId String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator       User?           @relation("CampaignCreator", fields: [createdByUserId], references: [id])
+  approver      User?           @relation("CampaignApprover", fields: [approvedByUserId], references: [id])
+  steps         CampaignStep[]
+  enrollments   CampaignEnrollment[]
+  communications Communication[]
+
+  @@index([organizationId])
+  @@map("campaigns")
+}
+
+model CampaignStep {
+  id          String   @id @default(uuid())
+  campaignId  String
+  sortOrder   Int
+  channel     CommunicationChannel
+  delayHours  Int      @default(0)
+  content     String?
+  conditions  Json?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("campaign_steps")
+}
+
+enum CampaignEnrollmentStatus {
+  ENROLLED
+  COMPLETED
+  STOPPED
+}
+
+model CampaignEnrollment {
+  id          String                    @id @default(uuid())
+  campaignId  String
+  contactId   String
+  status      CampaignEnrollmentStatus  @default(ENROLLED)
+  currentStep Int                       @default(0)
+  enrolledAt  DateTime                  @default(now())
+  stoppedAt   DateTime?
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("campaign_enrollments")
+}
+
+// ---------------------------------------------------------------------------
+// AI (schema only / unused in Phase 1 — see docs/architecture/ai-architecture.md)
+// ---------------------------------------------------------------------------
+
+enum AiAgentName {
+  LEAD_RESPONSE
+  FOLLOW_UP
+  BORROWER_ASSISTANT
+  REALTOR_AGENT
+  DATABASE_REACTIVATION
+}
+
+model AiAgent {
+  id               String      @id @default(uuid())
+  name             AiAgentName @unique
+  systemPrompt     String
+  allowedTools     String[]
+  guardrailPolicyId String?
+  modelId          String
+  isActive         Boolean     @default(false)
+
+  conversations AiConversation[]
+
+  @@map("ai_agents")
+}
+
+enum AiConversationStatus {
+  ACTIVE
+  ESCALATED
+  CLOSED
+}
+
+model AiConversation {
+  id             String                @id @default(uuid())
+  organizationId String
+  contactId      String
+  agentId        String
+  status         AiConversationStatus  @default(ACTIVE)
+  startedAt      DateTime              @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  agent        AiAgent      @relation(fields: [agentId], references: [id])
+  messages     AiMessage[]
+  actions      AiAction[]
+
+  @@index([organizationId])
+  @@map("ai_conversations")
+}
+
+enum AiMessageRole {
+  AGENT
+  CONTACT
+  SYSTEM
+}
+
+model AiMessage {
+  id             String        @id @default(uuid())
+  conversationId String
+  role           AiMessageRole
+  content        String
+  toolCalls      Json?
+  createdAt      DateTime      @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("ai_messages")
+}
+
+enum AiActionStatus {
+  PROPOSED
+  EXECUTED
+  REQUIRES_APPROVAL
+  REJECTED
+}
+
+model AiAction {
+  id             String         @id @default(uuid())
+  conversationId String
+  actionType     String
+  payload        Json?
+  status         AiActionStatus @default(PROPOSED)
+  executedAt     DateTime?
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("ai_actions")
+}
+
+// ---------------------------------------------------------------------------
+// Audit log (docs/architecture/security-architecture.md #3)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id             String    @id @default(uuid())
+  organizationId String
+  actorId        String?
+  actorType      ActorType @default(USER)
+  action         String
+  entityType     String
+  entityId       String
+  before         Json?
+  after          Json?
+  ipAddress      String?
+  timestamp      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([organizationId])
+  @@index([organizationId, entityType, entityId])
+  @@map("audit_logs")
+}

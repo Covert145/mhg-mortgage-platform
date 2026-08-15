@@ -1,0 +1,26 @@
+{
+  "name": "mhg-mortgage-platform",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "db:generate": "pnpm --filter @mhg/db generate",
+    "db:migrate": "pnpm --filter @mhg/db migrate",
+    "db:seed": "pnpm --filter @mhg/db seed",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  }
+}
